@@ -303,6 +303,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d212e1117a47d9741a0f128cdf04ffb2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  listenIp: 127.0.0.1
+  listenPort: 1001
+  saveCsv: 1
+  filePrefix: unity_unicorn_raw
+  logEvery100Packets: 1
 --- !u!4 &2024236955
 Transform:
   m_ObjectHideFlags: 0

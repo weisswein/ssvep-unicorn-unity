@@ -14,6 +14,7 @@ public class SsvepEventLogger : MonoBehaviour
     private void Start()
     {
         string dir = Path.Combine(Application.persistentDataPath, "UnicornData");
+        Debug.Log("your Save FilePath:"+Application.persistentDataPath);
         Directory.CreateDirectory(dir);
 
         string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
