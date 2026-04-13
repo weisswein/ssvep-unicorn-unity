@@ -30,6 +30,13 @@ public class SsvepExperimentController : MonoBehaviour
 
     private List<SsvepClass> trialSequence = new List<SsvepClass>();
 
+
+// Stimulus Image Objects
+    public SsvepStimulus leftObj;
+    public SsvepStimulus rightObj;
+    public SsvepStimulus upObj;
+    public SsvepStimulus downObj;
+
     private IEnumerator Start()
     {
         BuildTrialSequence();
@@ -82,16 +89,68 @@ public class SsvepExperimentController : MonoBehaviour
         }
     }
 
+
     private void StartStimulus(SsvepClass c)
     {
         // TODO:
         // Unityの点滅オブジェクト/Shader/UIに接続
         // ここではフックだけ置いている
+            switch(c.classId)
+        {
+            case 1:
+                if (leftObj != null) leftObj.StartStimulus(c.frequencyHz);
+                break;
+
+            case 2:
+                if (rightObj != null) rightObj.StartStimulus(c.frequencyHz);
+                break;
+
+            case 3:
+                if (upObj != null) upObj.StartStimulus(c.frequencyHz);
+                break;
+
+            case 4:
+                if (downObj != null) downObj.StartStimulus(c.frequencyHz);
+                break;
+
+            default:
+                Debug.LogWarning($"Unknown classId: {c.classId}");
+                break;
+        }
     }
 
     private void StopStimulus(SsvepClass c)
     {
         // TODO:
         // 点滅停止処理
+        switch (c.classId)
+        {
+            case 1:
+                if (leftObj != null) leftObj.StopStimulus();
+                break;
+
+            case 2:
+                if (rightObj != null) rightObj.StopStimulus();
+                break;
+
+            case 3:
+                if (upObj != null) upObj.StopStimulus();
+                break;
+
+            case 4:
+                if (downObj != null) downObj.StopStimulus();
+                break;
+
+            default:
+                Debug.LogWarning($"Unknown classId: {c.classId}");
+                break;
+        }
+    }
+    private void StopAllStimuli()
+    {
+        if (leftObj != null) leftObj.StopStimulus();
+        if (rightObj != null) rightObj.StopStimulus();
+        if (upObj != null) upObj.StopStimulus();
+        if (downObj != null) downObj.StopStimulus();
     }
 }
