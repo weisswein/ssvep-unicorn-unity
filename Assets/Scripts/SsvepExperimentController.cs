@@ -11,6 +11,7 @@ public class SsvepExperimentController : MonoBehaviour
         public float frequencyHz;
         public string label;
     }
+    public UnicornRealtimeSsvepTrainer realtimeTrainer;//RealtimeTrainer
 
     public UnicornTriggerSender triggerSender;
     public SsvepEventLogger eventLogger;
@@ -55,6 +56,9 @@ public class SsvepExperimentController : MonoBehaviour
             eventLogger.LogEvent(trialId, "start", c.classId, c.frequencyHz);
             triggerSender.SendTrigger(c.classId);
 
+            // 追加：trial開始を学習器へ通知
+            realtimeTrainer?.StartTrial(c.classId);
+
             Debug.Log($"[Trial {trialId}] START class={c.classId}, freq={c.frequencyHz}");
             yield return new WaitForSeconds(trialDuration);
 
@@ -62,6 +66,9 @@ public class SsvepExperimentController : MonoBehaviour
 
             eventLogger.LogEvent(trialId, "end", c.classId, c.frequencyHz);
             triggerSender.SendTrigger(100 + c.classId);
+
+            // 追加：trial終了を学習器へ通知
+            realtimeTrainer?.EndTrial();
 
             Debug.Log($"[Trial {trialId}] END");
             yield return new WaitForSeconds(restDuration);

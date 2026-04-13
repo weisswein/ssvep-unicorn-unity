@@ -18,6 +18,15 @@ public class UnicornUdpReceiver : MonoBehaviour
     public bool saveParsedCsv = true;
     public string filePrefix = "unity_unicorn_raw";
 
+    [Header("Realtime Trainer")]
+    public UnicornRealtimeSsvepTrainer realtimeTrainer;
+
+    [Tooltip("先頭から何チャンネルをEEGとして使うか")]
+    public int eegChannelCount = 8;
+
+    [Tooltip("受信レコードの何番目からEEGが始まるか")]
+    public int eegStartIndex = 0;
+
     [Header("Debug")]
     public bool printFirstPackets = true;
     public int printPacketCount = 5;
@@ -79,6 +88,21 @@ public class UnicornUdpReceiver : MonoBehaviour
         Debug.Log($"[UnicornUdpReceiver] Parsed CSV: {csvPath}");
     }
 
+    private void Update()
+    {
+        while (sampleQueue.TryDequeue(out float[] sample))
+        {
+            if (realtimeTrainer == null)
+                continue;
+
+            float[] eeg = ExtractEegChannels(sample, eegStartIndex, eegChannelCount);
+            if (eeg == null)
+                continue;
+
+            realtimeTrainer.AddSample(eeg, Time.time);
+        }
+    }
+
     private void ReceiveLoop()
     {
         byte[] receiveBufferByte = new byte[1024];
@@ -90,8 +114,9 @@ public class UnicornUdpReceiver : MonoBehaviour
                 int numberOfBytesReceived = socket.Receive(receiveBufferByte);
                 if (numberOfBytesReceived <= 0) continue;
 
-                // g.tec サンプルに合わせ、受信したバイト列を ASCII 文字列として扱う
-                string text = Encoding.ASCII.GetString(receiveBufferByte, 0, numberOfBytesReceived).Trim('\0', '\r', '\n', ' ', '\t');
+                string text = Encoding.ASCII.GetString(receiveBufferByte, 0, numberOfBytesReceived)
+                    .Trim('\0', '\r', '\n', ' ', '\t');
+
                 double pcTime = GetUnixTimeSeconds();
 
                 LatestRawText = text;
@@ -146,12 +171,26 @@ public class UnicornUdpReceiver : MonoBehaviour
         }
     }
 
+    private float[] ExtractEegChannels(float[] sample, int startIndex, int channelCount)
+    {
+        if (sample == null) return null;
+        if (startIndex < 0 || channelCount <= 0) return null;
+        if (sample.Length < startIndex + channelCount) return null;
+
+        float[] eeg = new float[channelCount];
+        for (int i = 0; i < channelCount; i++)
+        {
+            eeg[i] = sample[startIndex + i];
+        }
+
+        return eeg;
+    }
+
     private float[] TryParseAsciiRecord(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return null;
 
-        // Recorder の ASCII レコードに合わせて、まず区切り候補を探す
         char separator = '\0';
         if (text.Contains(",")) separator = ',';
         else if (text.Contains(";")) separator = ';';
@@ -222,7 +261,6 @@ public class UnicornUdpReceiver : MonoBehaviour
         }
         catch
         {
-            // ignore
         }
 
         if (receiveThread != null && receiveThread.IsAlive)
