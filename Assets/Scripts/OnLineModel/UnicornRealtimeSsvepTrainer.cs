@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class UnicornRealtimeSsvepTrainer : MonoBehaviour
 {
@@ -12,13 +13,19 @@ public class UnicornRealtimeSsvepTrainer : MonoBehaviour
     }
 
     [Header("EEG Settings")]
-    public int eegChannels = 8;
+    public int eegChannels = 3;
     public float nominalSampleRate = 250f;
     public float bufferSeconds = 20f;
+
+    [Header("Predict result text")]
+    public Text predict_text;
 
     [Header("Training Window")]
     public float trainingWindowSec = 2.0f;
     public int harmonics = 2;
+
+    [Header("Accuracy Display")]
+    public int minSamplesPerClassForAcc = 10;
 
     [Header("Classes")]
     public List<SsvepClass> classes = new List<SsvepClass>()
@@ -30,7 +37,6 @@ public class UnicornRealtimeSsvepTrainer : MonoBehaviour
     };
 
     private RealtimeEegBuffer eegBuffer;
-    private OnlineSTClassifier classifier = new OnlineSTClassifier();
     private List<float> targetFreqs = new List<float>();
 
     private bool trialRunning = false;
@@ -40,14 +46,24 @@ public class UnicornRealtimeSsvepTrainer : MonoBehaviour
     private int totalPredictions = 0;
     private int correctPredictions = 0;
 
+    // キャリブレーション進捗管理用
+    private Dictionary<int, int> classTrialCounts = new Dictionary<int, int>();
+
     private void Awake()
     {
         int capacity = Mathf.CeilToInt(bufferSeconds * nominalSampleRate);
         eegBuffer = new RealtimeEegBuffer(eegChannels, capacity);
 
         targetFreqs.Clear();
+        classTrialCounts.Clear();
+
         foreach (var c in classes)
+        {
             targetFreqs.Add(c.frequencyHz);
+            classTrialCounts[c.classId] = 0;
+        }
+
+        Debug.Log($"[RealtimeTrainer] Using EEG channels: {eegChannels}");
     }
 
     public void AddSample(float[] eegSample, float timeSec)
@@ -57,6 +73,9 @@ public class UnicornRealtimeSsvepTrainer : MonoBehaviour
 
     public void StartTrial(int classId)
     {
+        if (predict_text != null)
+            predict_text.text = "";
+
         currentClassId = classId;
         currentTrialStartTime = Time.time;
         trialRunning = true;
@@ -75,33 +94,77 @@ public class UnicornRealtimeSsvepTrainer : MonoBehaviour
         if (!eegBuffer.TryGetSegment(segmentStart, segmentEnd, out float[,] eegSegment))
         {
             Debug.LogWarning("[RealtimeTrainer] Failed to extract EEG segment.");
+
+            if (predict_text != null)
+                predict_text.text = "EEG segment extraction failed";
+
             ResetTrialState();
             return;
         }
 
         float fsEstimated = EstimateFs(eegSegment.GetLength(1), segmentEnd - segmentStart);
+
+        // CCA特徴（各周波数との相関）
         float[] feat = OnlineSFE.ExtractFeatures(eegSegment, fsEstimated, targetFreqs, harmonics);
 
-        int predBeforeUpdate = classifier.CanPredict() ? classifier.Predict(feat) : -1;
+        // 最大相関のクラスを選ぶ
+        int predIndex = OnlineSFE.PredictClass(eegSegment, fsEstimated, targetFreqs, harmonics);
+        int predBeforeUpdate = (predIndex >= 0 && predIndex < classes.Count)
+            ? classes[predIndex].classId
+            : -1;
+
+        // 今回trialをキャリブレーション回数に加算
+        if (classTrialCounts.ContainsKey(currentClassId))
+            classTrialCounts[currentClassId]++;
+        else
+            classTrialCounts[currentClassId] = 1;
+
+        bool accReady = IsAccReady();
+
+        // ACCは各クラス試行回数が閾値に達してから計算
+        if (predBeforeUpdate != -1 && accReady)
+        {
+            totalPredictions++;
+
+            if (predBeforeUpdate == currentClassId)
+                correctPredictions++;
+        }
+
+        float acc = (float)correctPredictions / Mathf.Max(1, totalPredictions);
 
         if (predBeforeUpdate != -1)
         {
-            totalPredictions++;
-            if (predBeforeUpdate == currentClassId) correctPredictions++;
-
-            float acc = (float)correctPredictions / Mathf.Max(1, totalPredictions);
-            Debug.Log($"[RealtimeTrainer] Predict BEFORE update: pred={predBeforeUpdate}, true={currentClassId}, runningAcc={acc:F3}");
+            Debug.Log($"[RealtimeTrainer] CCA Predict: pred={predBeforeUpdate}, true={currentClassId}, runningAcc={acc:F3}");
         }
         else
         {
-            Debug.Log("[RealtimeTrainer] Model not ready yet. First samples will be used only for training.");
+            Debug.Log("[RealtimeTrainer] Prediction failed.");
         }
 
-        classifier.UpdateModel(currentClassId, feat);
+        if (predict_text != null)
+        {
+            string accText;
 
-        Debug.Log($"[RealtimeTrainer] Model updated: class={currentClassId}, count={classifier.GetClassCount(currentClassId)}");
+            if (accReady)
+            {
+                accText = $"{acc:P1}";
+            }
+            else
+            {
+                accText = $"Calibration ({GetMinimumClassCount()}/{minSamplesPerClassForAcc})";
+            }
+
+            string predLabel = predBeforeUpdate != -1
+                ? GetLabelByClassId(predBeforeUpdate)
+                : "Unknown";
+
+            predict_text.text =
+                $"True : {GetLabelByClassId(currentClassId)}\n" +
+                $"Pred : {predLabel}\n" +
+                $"Acc  : {accText}";
+        }
+
         DebugFeature(feat);
-
         ResetTrialState();
     }
 
@@ -113,13 +176,13 @@ public class UnicornRealtimeSsvepTrainer : MonoBehaviour
         if (!eegBuffer.TryGetSegment(startTime, endTime, out float[,] eegSegment))
             return -1;
 
-        if (!classifier.CanPredict())
+        float fsEstimated = EstimateFs(eegSegment.GetLength(1), windowSec);
+
+        int predIndex = OnlineSFE.PredictClass(eegSegment, fsEstimated, targetFreqs, harmonics);
+        if (predIndex < 0 || predIndex >= classes.Count)
             return -1;
 
-        float fsEstimated = EstimateFs(eegSegment.GetLength(1), windowSec);
-        float[] feat = OnlineSFE.ExtractFeatures(eegSegment, fsEstimated, targetFreqs, harmonics);
-
-        return classifier.Predict(feat);
+        return classes[predIndex].classId;
     }
 
     private float EstimateFs(int samples, float durationSec)
@@ -137,11 +200,48 @@ public class UnicornRealtimeSsvepTrainer : MonoBehaviour
 
     private void DebugFeature(float[] feat)
     {
-        string s = "[RealtimeTrainer] feat = ";
+        string s = "[RealtimeTrainer] cca = ";
         for (int i = 0; i < feat.Length; i++)
         {
             s += $"{targetFreqs[i]:F2}Hz:{feat[i]:F3} ";
         }
         Debug.Log(s);
+    }
+
+    private string GetLabelByClassId(int classId)
+    {
+        foreach (var c in classes)
+        {
+            if (c.classId == classId)
+                return c.label;
+        }
+        return $"Class {classId}";
+    }
+
+    private bool IsAccReady()
+    {
+        foreach (var c in classes)
+        {
+            if (!classTrialCounts.ContainsKey(c.classId))
+                return false;
+
+            if (classTrialCounts[c.classId] < minSamplesPerClassForAcc)
+                return false;
+        }
+        return true;
+    }
+
+    private int GetMinimumClassCount()
+    {
+        int minCount = int.MaxValue;
+
+        foreach (var c in classes)
+        {
+            int count = classTrialCounts.ContainsKey(c.classId) ? classTrialCounts[c.classId] : 0;
+            if (count < minCount)
+                minCount = count;
+        }
+
+        return minCount == int.MaxValue ? 0 : minCount;
     }
 }

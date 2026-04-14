@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 [System.Serializable]
@@ -6,6 +7,20 @@ public class OnlineSTClassifier
 {
     private Dictionary<int, float[]> classMeans = new Dictionary<int, float[]>();
     private Dictionary<int, int> classCounts = new Dictionary<int, int>();
+
+    [System.Serializable]
+    private class ModelEntry
+    {
+        public int classId;
+        public float[] mean;
+        public int count;
+    }
+
+    [System.Serializable]
+    private class ModelData
+    {
+        public List<ModelEntry> entries = new List<ModelEntry>();
+    }
 
     public void UpdateModel(int classId, float[] feature)
     {
@@ -59,6 +74,52 @@ public class OnlineSTClassifier
     public int GetClassCount(int classId)
     {
         return classCounts.ContainsKey(classId) ? classCounts[classId] : 0;
+    }
+
+    public void SaveModel(string filePath)
+    {
+        ModelData modelData = new ModelData();
+
+        foreach (var kv in classMeans)
+        {
+            ModelEntry entry = new ModelEntry();
+            entry.classId = kv.Key;
+            entry.mean = kv.Value;
+            entry.count = classCounts.ContainsKey(kv.Key) ? classCounts[kv.Key] : 0;
+            modelData.entries.Add(entry);
+        }
+
+        string dir = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        string json = JsonUtility.ToJson(modelData, true);
+        File.WriteAllText(filePath, json);
+    }
+
+    public bool LoadModel(string filePath)
+    {
+        if (!File.Exists(filePath))
+            return false;
+
+        string json = File.ReadAllText(filePath);
+        ModelData modelData = JsonUtility.FromJson<ModelData>(json);
+
+        classMeans.Clear();
+        classCounts.Clear();
+
+        if (modelData == null || modelData.entries == null)
+            return false;
+
+        foreach (var entry in modelData.entries)
+        {
+            classMeans[entry.classId] = entry.mean;
+            classCounts[entry.classId] = entry.count;
+        }
+
+        return true;
     }
 
     private float CosineSimilarity(float[] a, float[] b)

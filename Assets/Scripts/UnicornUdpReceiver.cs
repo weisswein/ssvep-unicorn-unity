@@ -21,11 +21,9 @@ public class UnicornUdpReceiver : MonoBehaviour
     [Header("Realtime Trainer")]
     public UnicornRealtimeSsvepTrainer realtimeTrainer;
 
-    [Tooltip("先頭から何チャンネルをEEGとして使うか")]
-    public int eegChannelCount = 8;
-
-    [Tooltip("受信レコードの何番目からEEGが始まるか")]
-    public int eegStartIndex = 0;
+    [Header("Selected EEG Channels")]
+    [Tooltip("学習に使うEEG列番号。例: 後頭部が sig_5, sig_6, sig_7 なら {5,6,7}")]
+    public int[] selectedEegIndices = new int[] { 5, 6, 7 };
 
     [Header("Debug")]
     public bool printFirstPackets = true;
@@ -73,7 +71,6 @@ public class UnicornUdpReceiver : MonoBehaviour
         }
 
         IPEndPoint endPoint = new IPEndPoint(IPAddress.Any, listenPort);
-
         socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         socket.Bind(endPoint);
 
@@ -83,9 +80,7 @@ public class UnicornUdpReceiver : MonoBehaviour
         receiveThread.Start();
 
         Debug.Log($"[UnicornUdpReceiver] Listening on UDP port {listenPort}");
-        Debug.Log($"[UnicornUdpReceiver] Save dir: {baseDir}");
-        Debug.Log($"[UnicornUdpReceiver] Raw log: {rawLogPath}");
-        Debug.Log($"[UnicornUdpReceiver] Parsed CSV: {csvPath}");
+        Debug.Log($"[UnicornUdpReceiver] Selected EEG indices: {string.Join(", ", selectedEegIndices)}");
     }
 
     private void Update()
@@ -95,7 +90,7 @@ public class UnicornUdpReceiver : MonoBehaviour
             if (realtimeTrainer == null)
                 continue;
 
-            float[] eeg = ExtractEegChannels(sample, eegStartIndex, eegChannelCount);
+            float[] eeg = ExtractSelectedChannels(sample, selectedEegIndices);
             if (eeg == null)
                 continue;
 
@@ -171,16 +166,22 @@ public class UnicornUdpReceiver : MonoBehaviour
         }
     }
 
-    private float[] ExtractEegChannels(float[] sample, int startIndex, int channelCount)
+    private float[] ExtractSelectedChannels(float[] sample, int[] indices)
     {
-        if (sample == null) return null;
-        if (startIndex < 0 || channelCount <= 0) return null;
-        if (sample.Length < startIndex + channelCount) return null;
+        if (sample == null || indices == null || indices.Length == 0)
+            return null;
 
-        float[] eeg = new float[channelCount];
-        for (int i = 0; i < channelCount; i++)
+        float[] eeg = new float[indices.Length];
+
+        for (int i = 0; i < indices.Length; i++)
         {
-            eeg[i] = sample[startIndex + i];
+            int idx = indices[i];
+            if (idx < 0 || idx >= sample.Length)
+            {
+                Debug.LogWarning($"[UnicornUdpReceiver] Invalid channel index: {idx}");
+                return null;
+            }
+            eeg[i] = sample[idx];
         }
 
         return eeg;
@@ -205,9 +206,7 @@ public class UnicornUdpReceiver : MonoBehaviour
         for (int i = 0; i < parts.Length; i++)
         {
             if (!float.TryParse(parts[i].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out values[i]))
-            {
                 return null;
-            }
         }
 
         return values;
@@ -241,11 +240,6 @@ public class UnicornUdpReceiver : MonoBehaviour
         csvWriter.Flush();
     }
 
-    public bool TryDequeueSample(out float[] sample)
-    {
-        return sampleQueue.TryDequeue(out sample);
-    }
-
     public static double GetUnixTimeSeconds()
     {
         return (DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds;
@@ -255,13 +249,7 @@ public class UnicornUdpReceiver : MonoBehaviour
     {
         running = false;
 
-        try
-        {
-            socket?.Close();
-        }
-        catch
-        {
-        }
+        try { socket?.Close(); } catch { }
 
         if (receiveThread != null && receiveThread.IsAlive)
         {
